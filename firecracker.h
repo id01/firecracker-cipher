@@ -1,0 +1,240 @@
+#include <stdlib.h>
+#include <stdint.h>
+#define ROUNDS 4 // NOTE: Must be even
+#define FIRSTXOR 0x00 // This can be anything. Does it really matter?
+
+typedef unsigned char uchar;
+
+/*****
+TABLES
+*****/
+
+// Substitution tables. Should be random.
+const uchar firecracker_subtable[] = { 0xa0, 0x3b, 0x5f, 0xfb, 0xbf, 0x16, 0x4b, 0xca, 0x2c,
+0x3a, 0x58, 0x0d, 0x76, 0x8e, 0x69, 0x9d, 0x84, 0x0b, 0x4d, 0x9b, 0xf5, 0x82, 0x92, 0x26,
+0x8c, 0xda, 0xa7, 0xcf, 0x56, 0x52, 0x41, 0x89, 0x24, 0x75, 0xd4, 0x45, 0x04, 0x1f, 0x0e,
+0xb8, 0x70, 0x83, 0x60, 0x14, 0x88, 0x1a, 0x4e, 0x95, 0x34, 0x7d, 0xbe, 0x00, 0x93, 0x11,
+0x2a, 0x5e, 0x39, 0xa1, 0xff, 0xf1, 0x98, 0xd2, 0x33, 0x68, 0xaf, 0x6f, 0x51, 0xa2, 0x1d,
+0xa8, 0x2e, 0xc2, 0x90, 0x35, 0xb6, 0xf0, 0xe8, 0x97, 0xd5, 0x2f, 0xf4, 0x94, 0x17, 0xde,
+0x01, 0x7c, 0x1b, 0x4a, 0x47, 0x2b, 0x53, 0x74, 0xd8, 0x87, 0xd7, 0xea, 0xed, 0xe5, 0xe4,
+0xf3, 0xe0, 0x3e, 0x6e, 0x07, 0x4c, 0xec, 0x7f, 0x22, 0x50, 0xfa, 0xc0, 0x0a, 0xce, 0xbb,
+0x03, 0x6c, 0x62, 0x78, 0x0c, 0xef, 0xe6, 0x6a, 0xd6, 0xac, 0xb3, 0xdb, 0xe9, 0xe7, 0x8b,
+0x3c, 0x5d, 0x9f, 0x6b, 0x80, 0x5b, 0xe3, 0xf7, 0x3d, 0x28, 0x8a, 0x86, 0x06, 0x55, 0xfc,
+0xa6, 0x59, 0xf9, 0x7a, 0xb0, 0x42, 0xf2, 0x27, 0x3f, 0x91, 0x8d, 0xe1, 0xae, 0xdd, 0xb9,
+0x12, 0xd9, 0xfe, 0x02, 0x81, 0xd3, 0x2d, 0x79, 0x0f, 0xf8, 0x5c, 0xcd, 0x10, 0x8f, 0x36,
+0xa4, 0x67, 0x30, 0xb2, 0xc5, 0xc8, 0x73, 0xcc, 0x46, 0x15, 0x7e, 0x13, 0x57, 0xb1, 0x5a,
+0x49, 0x72, 0xb4, 0x54, 0x19, 0x31, 0xeb, 0x20, 0xaa, 0x38, 0x44, 0x09, 0xd1, 0xbc, 0xa9,
+0x40, 0x1e, 0x65, 0x71, 0xb7, 0x21, 0x37, 0xba, 0x61, 0x7b, 0xc7, 0x96, 0xfd, 0xa5, 0x48,
+0xd0, 0xc6, 0xab, 0x1c, 0x63, 0x66, 0xe2, 0xcb, 0x43, 0xf6, 0xb5, 0xad, 0xc1, 0xbd, 0x64,
+0xc4, 0x9a, 0x85, 0xc9, 0x9c, 0xc3, 0xdf, 0xa3, 0x32, 0x6d, 0x99, 0x4f, 0x23, 0x25, 0xdc,
+0x9e, 0x08, 0x29, 0x05, 0x77, 0xee, 0x18};
+const uchar firecracker_subtable_inverse[]={ 0x33, 0x54, 0xa2, 0x72, 0x24, 0xfc, 0x8d, 0x67,
+0xfa, 0xc8, 0x6f, 0x11, 0x76, 0x0b, 0x26, 0xa7, 0xab, 0x35, 0x9f, 0xb9, 0x2b, 0xb7, 0x05,
+0x52, 0xff, 0xc1, 0x2d, 0x56, 0xde, 0x44, 0xcd, 0x25, 0xc4, 0xd1, 0x6b, 0xf6, 0x20, 0xf7,
+0x17, 0x97, 0x8a, 0xfb, 0x36, 0x59, 0x08, 0xa5, 0x46, 0x4f, 0xb0, 0xc2, 0xf2, 0x3e, 0x30,
+0x49, 0xad, 0xd2, 0xc6, 0x38, 0x09, 0x01, 0x81, 0x89, 0x65, 0x98, 0xcc, 0x1e, 0x95, 0xe3,
+0xc7, 0x23, 0xb6, 0x58, 0xda, 0xbd, 0x57, 0x06, 0x68, 0x12, 0x2e, 0xf5, 0x6c, 0x42, 0x1d,
+0x5a, 0xc0, 0x8e, 0x1c, 0xba, 0x0a, 0x91, 0xbc, 0x86, 0xa9, 0x82, 0x37, 0x02, 0x2a, 0xd4,
+0x74, 0xdf, 0xe9, 0xce, 0xe0, 0xaf, 0x3f, 0x0e, 0x79, 0x84, 0x73, 0xf3, 0x66, 0x41, 0x28,
+0xcf, 0xbe, 0xb4, 0x5b, 0x21, 0x0c, 0xfd, 0x75, 0xa6, 0x93, 0xd5, 0x55, 0x31, 0xb8, 0x6a,
+0x85, 0xa3, 0x15, 0x29, 0x10, 0xec, 0x8c, 0x5d, 0x2c, 0x1f, 0x8b, 0x80, 0x18, 0x9a, 0x0d,
+0xac, 0x48, 0x99, 0x16, 0x34, 0x51, 0x2f, 0xd7, 0x4d, 0x3c, 0xf4, 0xeb, 0x13, 0xee, 0x0f,
+0xf9, 0x83, 0x00, 0x39, 0x43, 0xf1, 0xae, 0xd9, 0x90, 0x1a, 0x45, 0xcb, 0xc5, 0xdd, 0x7b,
+0xe6, 0x9c, 0x40, 0x94, 0xbb, 0xb1, 0x7c, 0xbf, 0xe5, 0x4a, 0xd0, 0x27, 0x9e, 0xd3, 0x71,
+0xca, 0xe8, 0x32, 0x04, 0x6e, 0xe7, 0x47, 0xef, 0xea, 0xb2, 0xdc, 0xd6, 0xb3, 0xed, 0x07,
+0xe2, 0xb5, 0xaa, 0x70, 0x1b, 0xdb, 0xc9, 0x3d, 0xa4, 0x22, 0x4e, 0x7a, 0x5e, 0x5c, 0xa0,
+0x19, 0x7d, 0xf8, 0x9d, 0x53, 0xf0, 0x64, 0x9b, 0xe1, 0x87, 0x62, 0x61, 0x78, 0x7f, 0x4c,
+0x7e, 0x5f, 0xc3, 0x69, 0x60, 0xfe, 0x77, 0x4b, 0x3b, 0x96, 0x63, 0x50, 0x14, 0xe4, 0x88,
+0xa8, 0x92, 0x6d, 0x03, 0x8f, 0xd8, 0xa1, 0x3a};
+
+/***
+PRNG
+***/
+
+typedef struct firecracker_prng_struct {
+	uint8_t length;
+	uint64_t state[];
+} firecracker_prng_struct;
+
+// PRNG Init function. prng size should equal 1+8*length
+void firecracker_prng_struct_init(firecracker_prng_struct* creating, uint8_t length) {
+	creating->length = length;
+	for (uint8_t i=0; i<length; i++) {
+		creating->state[i] = 0;
+	}
+}
+
+/*void shiftArray(uint8_t length, uint64_t* array) {
+	uint64_t transferPrevious=0x00, transferCurrent;
+	for (uint8_t i=0; i<length; i++) {
+		transferCurrent = array[i]<<7;
+		array[i] = array[i]>>1|transferPrevious;
+		transferPrevious = transferCurrent;
+	}
+	array[0] = array[0]|transferPrevious;
+}*/
+
+// Randomize stuff
+uint64_t firecracker_byte(uint64_t currentchar, uint64_t keychar) {
+	uint8_t *currentcharsplit = (uint8_t*)&currentchar;
+	for (uint8_t i=0; i<16; i++) {
+		// Add, XOR, Subtract, XNOR, Substitute
+		currentchar += keychar; keychar = (keychar<<1|keychar>>7);
+		currentchar ^= keychar; keychar = (keychar<<1|keychar>>7);
+		currentchar -= keychar; keychar = (keychar<<1|keychar>>7);
+		currentchar ^=~keychar; keychar = (keychar<<1|keychar>>7);
+		currentcharsplit[0] = firecracker_subtable[currentcharsplit[0]];
+		currentcharsplit[1] = firecracker_subtable[currentcharsplit[1]];
+		currentcharsplit[2] = firecracker_subtable[currentcharsplit[2]];
+		currentcharsplit[3] = firecracker_subtable[currentcharsplit[3]];
+	}
+	return currentchar;
+}
+
+// PRNG seed - Seed should be of equal length to state
+void firecracker_seed(firecracker_prng_struct* prng, uint64_t* seed) {
+	for (uint8_t x=0; x<prng->length; x++) {
+		prng->state[x] = firecracker_byte(prng->state[x], seed[x]);
+	}
+	for (uint8_t x=0; x<prng->length-1; x++) {
+		prng->state[x] = firecracker_byte(prng->state[x], prng->state[x+1]);
+	}
+	prng->state[prng->length-1] = firecracker_byte(prng->state[prng->length-1], prng->state[0]);
+	for (uint8_t x=1; x<prng->length; x++) {
+		prng->state[x] = firecracker_byte(prng->state[x], prng->state[x-1]);
+	}
+	prng->state[0] = firecracker_byte(prng->state[0], prng->state[prng->length-1]);
+}
+
+uint64_t firecracker_rand(firecracker_prng_struct* prng) {
+	uint64_t currentchar, keychar, firstchar;
+	// firecracker each character
+	firstchar = prng->state[0];
+	for (uint8_t i=0; i<prng->length-1; i++) {
+		currentchar = prng->state[i];
+		keychar = prng->state[i+1];
+		currentchar = firecracker_byte(currentchar, keychar);
+		prng->state[i] = currentchar;
+	}
+	currentchar = prng->state[prng->length-1];
+	keychar = firstchar;
+	currentchar = firecracker_byte(currentchar, keychar);
+	prng->state[prng->length-1] = currentchar;
+	// XOR everything
+	currentchar = 0x00;
+	for (uint8_t i=0; i<prng->length; i++) {
+		currentchar ^= prng->state[i];
+	}
+	return currentchar;
+}
+
+/*********
+ENCRYPTION
+*********/
+
+// Run all rounds of firecracker for a char Encrypting/Decrypting
+uchar firecracker_rounds_encrypt(uchar currentchar, uchar keychar) {
+	// Substitute
+	currentchar = firecracker_subtable[currentchar];
+	for (uint8_t i=0; i<ROUNDS; i++) {
+		// Add, XOR, Subtract, XNOR, Substitute
+		currentchar += keychar; keychar = (keychar<<1|keychar>>7);
+		currentchar ^= keychar; keychar = (keychar<<1|keychar>>7);
+		currentchar -= keychar; keychar = (keychar<<1|keychar>>7);
+		currentchar ^=~keychar; keychar = (keychar<<1|keychar>>7);
+		currentchar = firecracker_subtable[currentchar];
+	}
+	return currentchar;
+}
+uchar firecracker_rounds_decrypt(uchar currentchar, uchar keychar) {
+	// Shift backwards by one before decrypting
+	keychar = (keychar>>1|keychar<<7);
+	// Substitute
+	currentchar = firecracker_subtable_inverse[currentchar];
+	for (uint8_t i=0; i<ROUNDS; i++) {
+		// XNOR, Add, XOR, Subtract Substitute
+		currentchar ^=~keychar; keychar = (keychar>>1|keychar<<7);
+		currentchar += keychar; keychar = (keychar>>1|keychar<<7);
+		currentchar ^= keychar; keychar = (keychar>>1|keychar<<7);
+		currentchar -= keychar; keychar = (keychar>>1|keychar<<7);
+		currentchar = firecracker_subtable_inverse[currentchar];
+	}
+	return currentchar;
+}
+
+// Encryption Procedure
+int firecracker_encrypt(uchar* plaintext, unsigned int plaintext_len, uchar* key, uchar* seed, uchar* ciphertext) {
+	// Verify compatibility
+	if (plaintext_len%8)
+		return 0;
+	// Define constants
+	const unsigned int KEYLENGTH = 32;
+	// Create random number stream
+	uint64_t* keystream64 = malloc(plaintext_len);
+	unsigned int keystream64_len = plaintext_len/8;
+	firecracker_prng_struct* prng = malloc(KEYLENGTH+4);
+	firecracker_prng_struct_init(prng, KEYLENGTH/8);
+	firecracker_seed(prng, (uint64_t*)key);
+	firecracker_seed(prng, (uint64_t*)seed);
+	for (int i=0; i<plaintext_len/8; i++) {
+		keystream64[i] = firecracker_rand(prng);
+	}
+	uchar* keystream = (uchar*)keystream64;
+	// Encrypt
+	uchar currentchar, previouschar=FIRSTXOR, keychar;
+	for (unsigned int i=0; i<plaintext_len; i++) {
+		// Import Bytes and XOR
+		keychar = keystream[i];
+		currentchar = firecracker_rounds_encrypt(plaintext[i], previouschar);
+		// Loop for ROUNDS
+		currentchar = firecracker_rounds_encrypt(currentchar, keychar);
+		// Write to ciphertext and previouschar
+		previouschar = ciphertext[i] = currentchar;
+	}
+	// Erase keystream and return success
+	for (unsigned int i=0; i<keystream64_len; i++) {
+		keystream64[i] = 0;
+	}
+	return 1;
+}
+
+// Decryption Procedure
+int firecracker_decrypt(uchar* ciphertext, unsigned int ciphertext_len, uchar* key, uchar* seed, uchar* plaintext) {
+	// Verify compatibility
+	if (ciphertext_len%4)
+		return 0;
+	// Define constants
+	const unsigned int KEYLENGTH = 32;
+	// Create random number stream
+	uint64_t* keystream64 = malloc(ciphertext_len);
+	unsigned int keystream64_len = ciphertext_len/8;
+	firecracker_prng_struct* prng = malloc(KEYLENGTH+4);
+	firecracker_prng_struct_init(prng, KEYLENGTH/8);
+	firecracker_seed(prng, (uint64_t*)key);
+	firecracker_seed(prng, (uint64_t*)seed);
+	for (int i=0; i<ciphertext_len/8; i++) {
+		keystream64[i] = firecracker_rand(prng);
+	}
+	uchar* keystream = (uchar*)keystream64;
+	// Decrypt
+	uchar currentchar, previouschar, keychar;
+	for (unsigned int i=ciphertext_len-1; i>0; i--) {
+		// Import Bytes
+		keychar = keystream[i];
+		currentchar = ciphertext[i];
+		previouschar = ciphertext[i-1];
+		// Loop for ROUNDS
+		currentchar = firecracker_rounds_decrypt(currentchar, keychar);
+		// XOR and write to plaintext
+		plaintext[i] = firecracker_rounds_decrypt(currentchar, previouschar);
+	}
+	// Final Decryption
+	currentchar = ciphertext[0];
+	currentchar = firecracker_rounds_decrypt(currentchar, keystream[0]);
+	plaintext[0] = firecracker_rounds_decrypt(currentchar, FIRSTXOR);
+	// Erase keystream and return success
+	for (unsigned int i=0; i<keystream64_len; i++) {
+		keystream64[i] = 0;
+	}
+	return 1;
+}
