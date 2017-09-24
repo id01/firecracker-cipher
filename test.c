@@ -9,6 +9,7 @@ void urandom(uchar* output, int outputlen) {
 	for (int i=0; i<outputlen; i++) {
 		output[i] = fgetc(f_dev_urandom);
 	}
+	fclose(f_dev_urandom);
 }
 
 int main() {
