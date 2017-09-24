@@ -1,9 +1,9 @@
 #include <stdlib.h>
 #include <stdint.h>
-#define ROUNDS 4 // NOTE: Must be even
 #define FIRSTXOR 0x00 // This can be anything. Does it really matter?
 
 typedef unsigned char uchar;
+typedef uint16_t fclen_int;
 
 /*****
 TABLES
@@ -52,37 +52,27 @@ PRNG
 ***/
 
 typedef struct firecracker_prng_struct {
-	uint8_t length;
+	fclen_int length;
 	uint64_t state[];
 } firecracker_prng_struct;
 
 // PRNG Init function. prng size should equal 1+8*length
-void firecracker_prng_struct_init(firecracker_prng_struct* creating, uint8_t length) {
+void firecracker_prng_struct_init(firecracker_prng_struct* creating, fclen_int length) {
 	creating->length = length;
-	for (uint8_t i=0; i<length; i++) {
+	for (fclen_int i=0; i<length; i++) {
 		creating->state[i] = 0;
 	}
 }
 
-/*void shiftArray(uint8_t length, uint64_t* array) {
-	uint64_t transferPrevious=0x00, transferCurrent;
-	for (uint8_t i=0; i<length; i++) {
-		transferCurrent = array[i]<<7;
-		array[i] = array[i]>>1|transferPrevious;
-		transferPrevious = transferCurrent;
-	}
-	array[0] = array[0]|transferPrevious;
-}*/
-
-// Randomize stuff
+// Encryption or Decryption functions for a uint64_t. firecracker_byte is also used for prng.
 uint64_t firecracker_byte(uint64_t currentchar, uint64_t keychar) {
 	uint8_t *currentcharsplit = (uint8_t*)&currentchar;
 	for (uint8_t i=0; i<16; i++) {
 		// Add, XOR, Subtract, XNOR, Substitute
-		currentchar += keychar; keychar = (keychar<<1|keychar>>7);
-		currentchar ^= keychar; keychar = (keychar<<1|keychar>>7);
-		currentchar -= keychar; keychar = (keychar<<1|keychar>>7);
-		currentchar ^=~keychar; keychar = (keychar<<1|keychar>>7);
+		currentchar += keychar; keychar = (keychar<<1|keychar>>63);
+		currentchar ^= keychar; keychar = (keychar<<1|keychar>>63);
+		currentchar -= keychar; keychar = (keychar<<1|keychar>>63);
+		currentchar ^=~keychar; keychar = (keychar<<1|keychar>>63);
 		currentcharsplit[0] = firecracker_subtable[currentcharsplit[0]];
 		currentcharsplit[1] = firecracker_subtable[currentcharsplit[1]];
 		currentcharsplit[2] = firecracker_subtable[currentcharsplit[2]];
@@ -90,17 +80,32 @@ uint64_t firecracker_byte(uint64_t currentchar, uint64_t keychar) {
 	}
 	return currentchar;
 }
+uint64_t firecracker_inverse_byte(uint64_t currentchar, uint64_t keychar) {
+	uint8_t *currentcharsplit = (uint8_t*)&currentchar;
+	for (uint8_t i=0; i<16; i++) {
+		// Substitute, XNOR, Add, XOR, Subtract
+		currentcharsplit[0] = firecracker_subtable_inverse[currentcharsplit[0]];
+		currentcharsplit[1] = firecracker_subtable_inverse[currentcharsplit[1]];
+		currentcharsplit[2] = firecracker_subtable_inverse[currentcharsplit[2]];
+		currentcharsplit[3] = firecracker_subtable_inverse[currentcharsplit[3]];
+		keychar = (keychar>>1|keychar<<63); currentchar ^=~keychar;
+		keychar = (keychar>>1|keychar<<63); currentchar += keychar;
+		keychar = (keychar>>1|keychar<<63); currentchar ^= keychar;
+		keychar = (keychar>>1|keychar<<63); currentchar -= keychar;
+	}
+	return currentchar;
+}
 
 // PRNG seed - Seed should be of equal length to state
 void firecracker_seed(firecracker_prng_struct* prng, uint64_t* seed) {
-	for (uint8_t x=0; x<prng->length; x++) {
+	for (fclen_int x=0; x<prng->length; x++) {
 		prng->state[x] = firecracker_byte(prng->state[x], seed[x]);
 	}
-	for (uint8_t x=0; x<prng->length-1; x++) {
+	for (fclen_int x=0; x<prng->length-1; x++) {
 		prng->state[x] = firecracker_byte(prng->state[x], prng->state[x+1]);
 	}
 	prng->state[prng->length-1] = firecracker_byte(prng->state[prng->length-1], prng->state[0]);
-	for (uint8_t x=1; x<prng->length; x++) {
+	for (fclen_int x=1; x<prng->length; x++) {
 		prng->state[x] = firecracker_byte(prng->state[x], prng->state[x-1]);
 	}
 	prng->state[0] = firecracker_byte(prng->state[0], prng->state[prng->length-1]);
@@ -110,7 +115,7 @@ uint64_t firecracker_rand(firecracker_prng_struct* prng) {
 	uint64_t currentchar, keychar, firstchar;
 	// firecracker each character
 	firstchar = prng->state[0];
-	for (uint8_t i=0; i<prng->length-1; i++) {
+	for (fclen_int i=0; i<prng->length-1; i++) {
 		currentchar = prng->state[i];
 		keychar = prng->state[i+1];
 		currentchar = firecracker_byte(currentchar, keychar);
@@ -122,7 +127,7 @@ uint64_t firecracker_rand(firecracker_prng_struct* prng) {
 	prng->state[prng->length-1] = currentchar;
 	// XOR everything
 	currentchar = 0x00;
-	for (uint8_t i=0; i<prng->length; i++) {
+	for (fclen_int i=0; i<prng->length; i++) {
 		currentchar ^= prng->state[i];
 	}
 	return currentchar;
@@ -132,109 +137,66 @@ uint64_t firecracker_rand(firecracker_prng_struct* prng) {
 ENCRYPTION
 *********/
 
-// Run all rounds of firecracker for a char Encrypting/Decrypting
-uchar firecracker_rounds_encrypt(uchar currentchar, uchar keychar) {
-	// Substitute
-	currentchar = firecracker_subtable[currentchar];
-	for (uint8_t i=0; i<ROUNDS; i++) {
-		// Add, XOR, Subtract, XNOR, Substitute
-		currentchar += keychar; keychar = (keychar<<1|keychar>>7);
-		currentchar ^= keychar; keychar = (keychar<<1|keychar>>7);
-		currentchar -= keychar; keychar = (keychar<<1|keychar>>7);
-		currentchar ^=~keychar; keychar = (keychar<<1|keychar>>7);
-		currentchar = firecracker_subtable[currentchar];
-	}
-	return currentchar;
-}
-uchar firecracker_rounds_decrypt(uchar currentchar, uchar keychar) {
-	// Shift backwards by one before decrypting
-	keychar = (keychar>>1|keychar<<7);
-	// Substitute
-	currentchar = firecracker_subtable_inverse[currentchar];
-	for (uint8_t i=0; i<ROUNDS; i++) {
-		// XNOR, Add, XOR, Subtract Substitute
-		currentchar ^=~keychar; keychar = (keychar>>1|keychar<<7);
-		currentchar += keychar; keychar = (keychar>>1|keychar<<7);
-		currentchar ^= keychar; keychar = (keychar>>1|keychar<<7);
-		currentchar -= keychar; keychar = (keychar>>1|keychar<<7);
-		currentchar = firecracker_subtable_inverse[currentchar];
-	}
-	return currentchar;
-}
-
 // Encryption Procedure
-int firecracker_encrypt(uchar* plaintext, unsigned int plaintext_len, uchar* key, uchar* seed, uchar* ciphertext) {
+int firecracker_encrypt(uchar* plaintext, unsigned int plaintext_len, uchar* key, uchar* seed, uchar* ciphertext, const fclen_int KEYLENGTH) {
 	// Verify compatibility
-	if (plaintext_len%8)
+	if (plaintext_len%8 || KEYLENGTH<16 || KEYLENGTH%8)
 		return 0;
-	// Define constants
-	const unsigned int KEYLENGTH = 32;
-	// Create random number stream
-	uint64_t* keystream64 = malloc(plaintext_len);
-	unsigned int keystream64_len = plaintext_len/8;
+	// Seed random number stream
 	firecracker_prng_struct* prng = malloc(KEYLENGTH+4);
 	firecracker_prng_struct_init(prng, KEYLENGTH/8);
 	firecracker_seed(prng, (uint64_t*)key);
 	firecracker_seed(prng, (uint64_t*)seed);
-	for (int i=0; i<plaintext_len/8; i++) {
-		keystream64[i] = firecracker_rand(prng);
-	}
-	uchar* keystream = (uchar*)keystream64;
 	// Encrypt
-	uchar currentchar, previouschar=FIRSTXOR, keychar;
-	for (unsigned int i=0; i<plaintext_len; i++) {
-		// Import Bytes and XOR
-		keychar = keystream[i];
-		currentchar = firecracker_rounds_encrypt(plaintext[i], previouschar);
-		// Loop for ROUNDS
-		currentchar = firecracker_rounds_encrypt(currentchar, keychar);
+	uint64_t* toseed = malloc(KEYLENGTH);
+	uint64_t* plaintext64 = (uint64_t*)plaintext;
+	uint64_t* ciphertext64 = (uint64_t*)ciphertext;
+	uint64_t currentchar, previouschar=FIRSTXOR, keychar;
+	for (unsigned int i=0; i<plaintext_len/8; i++) {
+		// Get PRNG output
+		keychar = firecracker_rand(prng);
+		// Import Bytes and Encrypt
+		currentchar = firecracker_byte(firecracker_byte(plaintext64[i], previouschar), keychar);
 		// Write to ciphertext and previouschar
-		previouschar = ciphertext[i] = currentchar;
-	}
-	// Erase keystream and return success
-	for (unsigned int i=0; i<keystream64_len; i++) {
-		keystream64[i] = 0;
+		previouschar = ciphertext64[i] = currentchar;
+		// Seed
+		for (unsigned int ii=0; ii<KEYLENGTH/8; ii++) {
+			toseed[ii] = currentchar;
+		}
+		firecracker_seed(prng, toseed);
 	}
 	return 1;
 }
 
 // Decryption Procedure
-int firecracker_decrypt(uchar* ciphertext, unsigned int ciphertext_len, uchar* key, uchar* seed, uchar* plaintext) {
+int firecracker_decrypt(uchar* ciphertext, unsigned int ciphertext_len, uchar* key, uchar* seed, uchar* plaintext, const fclen_int KEYLENGTH) {
 	// Verify compatibility
-	if (ciphertext_len%4)
+	if (ciphertext_len%8 || KEYLENGTH<16 || KEYLENGTH%8)
 		return 0;
-	// Define constants
-	const unsigned int KEYLENGTH = 32;
-	// Create random number stream
-	uint64_t* keystream64 = malloc(ciphertext_len);
-	unsigned int keystream64_len = ciphertext_len/8;
+	// Seed random number stream
 	firecracker_prng_struct* prng = malloc(KEYLENGTH+4);
 	firecracker_prng_struct_init(prng, KEYLENGTH/8);
 	firecracker_seed(prng, (uint64_t*)key);
 	firecracker_seed(prng, (uint64_t*)seed);
-	for (int i=0; i<ciphertext_len/8; i++) {
-		keystream64[i] = firecracker_rand(prng);
-	}
-	uchar* keystream = (uchar*)keystream64;
-	// Decrypt
-	uchar currentchar, previouschar, keychar;
-	for (unsigned int i=ciphertext_len-1; i>0; i--) {
-		// Import Bytes
-		keychar = keystream[i];
-		currentchar = ciphertext[i];
-		previouschar = ciphertext[i-1];
-		// Loop for ROUNDS
-		currentchar = firecracker_rounds_decrypt(currentchar, keychar);
-		// XOR and write to plaintext
-		plaintext[i] = firecracker_rounds_decrypt(currentchar, previouschar);
-	}
-	// Final Decryption
-	currentchar = ciphertext[0];
-	currentchar = firecracker_rounds_decrypt(currentchar, keystream[0]);
-	plaintext[0] = firecracker_rounds_decrypt(currentchar, FIRSTXOR);
-	// Erase keystream and return success
-	for (unsigned int i=0; i<keystream64_len; i++) {
-		keystream64[i] = 0;
+	// Encrypt
+	uint64_t* toseed = malloc(KEYLENGTH);
+	uint64_t* plaintext64 = (uint64_t*)plaintext;
+	uint64_t* ciphertext64 = (uint64_t*)ciphertext;
+	uint64_t currentchar, previouschar=FIRSTXOR, keychar;
+	for (unsigned int i=0; i<ciphertext_len/8; i++) {
+		// Get PRNG output
+		keychar = firecracker_rand(prng);
+		// Get encrypted current char
+		currentchar = ciphertext64[i];
+		// Import Bytes and Encrypt
+		plaintext64[i] = firecracker_inverse_byte(firecracker_inverse_byte(ciphertext64[i], keychar), previouschar);
+		// Write to previouschar
+		previouschar = currentchar;
+		// Seed
+		for (unsigned int ii=0; ii<KEYLENGTH/8; ii++) {
+			toseed[ii] = currentchar;
+		}
+		firecracker_seed(prng, toseed);
 	}
 	return 1;
 }
